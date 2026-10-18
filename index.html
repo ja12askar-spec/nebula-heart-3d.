@@ -42,7 +42,7 @@ button:active{transform:scale(.92)}
 <canvas id="scene"></canvas>
 <div id="hud"><h1>NEBULA HEART</h1><div id="status">Нажми «Включить камеру» или просто тяни пальцем</div></div>
 <div id="camwrap"><div id="camin"><video id="cam" autoplay playsinline muted></video><canvas id="ov" width="210" height="280"></canvas></div></div>
-<div id="hint">☝ сердце · ✌ галактика · ✊ сожми и разожми — взрыв<br>пальцы вместе/врозь — размер · рука влево/вправо — поворот<br>🤲 две руки: расставь — размер · наклони — поворот · хлопок — взрыв<br>🫶 сердце из рук · одинаковые пальцы на обеих руках: 1 — тор, 2 — куб, 3 — звезда · кулак + ладонь — вихрь<br><span style="opacity:.7">Без камеры: тяни пальцем, тап — взрыв, два пальца — размер и поворот</span></div>
+<div id="hint">✊ сожми и разожми — взрыв<br>пальцы вместе/врозь — размер · рука влево/вправо — поворот<br>🤲 две руки: расставь — размер · наклони — поворот · хлопок — взрыв<br>🫶 сердце из рук · одинаковые пальцы на обеих руках: 1 — тор, 2 — куб, 3 — звезда · кулак + ладонь — вихрь<br><span style="opacity:.7">Без камеры: тяни пальцем, тап — взрыв, два пальца — размер и поворот</span></div>
 <div id="dock">
   <div id="shapes">
     <button data-s="0" class="on">❤️<span>Сердце</span></button>
@@ -53,6 +53,7 @@ button:active{transform:scale(.92)}
     <button data-s="more">🔮<span>Ещё</span></button>
   </div>
   <div id="tools">
+    <button id="feel" title="Скорость реакции">🐢</button>
     <button id="theme" title="Цвет">🎨</button>
     <button id="snd" title="Звук">🔇</button>
     <button id="shot" title="Снимок">📸</button>
@@ -88,6 +89,9 @@ let sp=1,spv=0,spreadTarget=1,energy=0,time=0,last=performance.now();
 let handSeen=-1e9,handWas=false,lastInput=performance.now(),fistOn=false,prevC=null;
 let kind=0,themeI=0,lastText='Я ❤ ТЕБЯ',holdCnt=-1,holdSince=0,tracker=null,camRunner=null;
 let ac=null,soundOn=false,lastP=0;
+let feel=0;const FEEL=[{k:2.4,hold:850,ema:.14,need:5},{k:4,hold:600,ema:.3,need:3},{k:6,hold:450,ema:.6,need:1}];
+const ease=(c,v,a)=>c+(v-c)*a;
+const st={};function stab(key,v){const s=st[key]||(st[key]={v:v,c:v,n:0});if(v===s.c)s.n++;else{s.c=v;s.n=1}if(s.n>=FEEL[feel].need)s.v=v;return s.v}
 let roll=0,rollT=0,twoSeen=-1e9,twoWas=false,twoHold=-1,twoSince=0,tpx=0,tpy=0,tpTx=0,tpTy=0,prevDist=null;
 const U={uT:{value:1},uTime:{value:0},uScale:{value:1},uSpread:{value:1},uPulse:{value:1},uEnergy:{value:0},
   uC1:{value:new THREE.Color(THEMES[0][0])},uC2:{value:new THREE.Color(THEMES[0][1])},uC3:{value:new THREE.Color(THEMES[0][2])}};
@@ -239,11 +243,11 @@ function animate(){
   twoWas=two;
   if(two){if(kind!==4)autoAngle+=dt*.5}else if(ptrs.size<2)rollT*=Math.max(0,1-dt*1.5);
   if(idle){if(kind===4)targetRot=Math.sin(time*.7)*.5;else autoAngle+=dt*.35;targetTilt=.12+Math.sin(time*.5)*.08}
-  const k=Math.min(1,dt*6);
+  const k=Math.min(1,dt*FEEL[feel].k);
   rot+=(targetRot-rot)*k;tilt+=(targetTilt-tilt)*k;size+=(targetSize-size)*k;roll+=(rollT-roll)*k;tpx+=(tpTx-tpx)*k;tpy+=(tpTy-tpy)*k;
-  spv+=((spreadTarget-sp)*90-spv*9)*dt;sp+=spv*dt;if(sp<.02)sp=.02;
+  spv+=((spreadTarget-sp)*55-spv*8)*dt;sp+=spv*dt;if(sp<.02)sp=.02;
   energy=Math.max(0,energy-dt*.9);
-  if(U.uT.value<1)U.uT.value=Math.min(1,U.uT.value+dt/1.7);
+  if(U.uT.value<1)U.uT.value=Math.min(1,U.uT.value+dt/2.1);
   const P=time%1.1,b=Math.exp(-Math.pow((P-.06)/.06,2))*.09+Math.exp(-Math.pow((P-.27)/.07,2))*.06;
   U.uPulse.value=1+b*(kind===0?1:.4);
   if(soundOn&&kind===0){if(P<lastP)thump(55,.5);else if(lastP<.26&&P>=.26)thump(46,.32)}
@@ -275,18 +279,15 @@ function onHand(r){
 function oneHand(l){
   const now=performance.now();handSeen=now;lastInput=now;
   const cx=(l[0].x+l[5].x+l[17].x)/3,cy=(l[0].y+l[5].y+l[17].y)/3;
-  if(prevC)energy=Math.min(1,Math.max(energy,Math.hypot(cx-prevC[0],cy-prevC[1])*14));
+  if(prevC)energy=Math.min(1,Math.max(energy,Math.hypot(cx-prevC[0],cy-prevC[1])*9));
   prevC=[cx,cy];
-  targetRot=(.5-cx)*2.6;targetTilt=(cy-.5)*1.0;
-  const cnt=fingers(l);
+  targetRot=ease(targetRot,(.5-cx)*2.6,FEEL[feel].ema);targetTilt=ease(targetTilt,(cy-.5)*1.0,FEEL[feel].ema);
+  const cnt=stab("one",fingers(l));
   if(cnt===0){if(!fistOn){fistOn=true;spreadTarget=.1}status.textContent='✊ Сжимаю… разожми — взрыв!'}
   else{
     if(fistOn){fistOn=false;spreadTarget=1;burst(9)}
-    if(cnt>=3){const ratio=d2(l[4],l[8])/Math.max(.01,d2(l[0],l[9]));targetSize=Math.max(.55,Math.min(1.7,.5+ratio*.9));status.textContent='🖐 Размер, поворот и наклон — рукой'}
-    else status.textContent=cnt===1?'☝ Сердце':'✌ Галактика';
-    const want=cnt===1?0:cnt===2?1:-1;
-    if(want>=0){if(holdCnt!==cnt){holdCnt=cnt;holdSince=now}else if(now-holdSince>500&&kind!==want){setShape(want);holdSince=now+99999}}
-    else holdCnt=-1;
+    if(cnt>=3){const ratio=d2(l[4],l[8])/Math.max(.01,d2(l[0],l[9]));targetSize=ease(targetSize,Math.max(.55,Math.min(1.7,.5+ratio*.9)),FEEL[feel].ema);status.textContent='🖐 Размер, поворот и наклон — рукой'}
+    else status.textContent='✋ Двигай рукой — поворот и наклон';
   }
 }
 function mid(l){return{x:(l[0].x+l[5].x+l[17].x)/3,y:(l[0].y+l[5].y+l[17].y)/3}}
@@ -297,13 +298,13 @@ function twoHands(a,b){
   if(ma.x<mb.x){const t=ma;ma=mb;mb=t;const u=a;a=b;b=u}
   const mx=(ma.x+mb.x)/2,my=(ma.y+mb.y)/2,dist=Math.hypot((ma.x-mb.x)*1.33,ma.y-mb.y);
   const sa=1-ma.x,sb=1-mb.x;
-  rollT=Math.max(-1.3,Math.min(1.3,Math.atan2(ma.y-mb.y,sb-sa)));
+  rollT=ease(rollT,Math.max(-1.3,Math.min(1.3,Math.atan2(ma.y-mb.y,sb-sa))),FEEL[feel].ema);
   const h=2*camera.position.z*Math.tan(22.5*Math.PI/180),visW=h*camera.aspect;
-  tpTx=(.5-mx)*visW;tpTy=(.5-my)*h;targetTilt=.2;
+  tpTx=ease(tpTx,(.5-mx)*visW,FEEL[feel].ema);tpTy=ease(tpTy,(.5-my)*h,FEEL[feel].ema);targetTilt=.2;
   const p=(d2(a[0],a[9])+d2(b[0],b[9]))/2;
   const heart=extMid(a)===0&&extMid(b)===0&&d2(a[8],b[8])<p*.6&&d2(a[4],b[4])<p*.6&&d2(a[4],a[8])>p*.6&&d2(b[4],b[8])>p*.6;
-  const ca=fingers(a),cb=fingers(b),maxS=Math.min(2.4,visW/3.2);
-  targetSize=heart?Math.min(1.3,maxS):Math.max(.5,Math.min(maxS,.35+dist*2.4));
+  const ca=stab("a",fingers(a)),cb=stab("b",fingers(b)),maxS=Math.min(2.4,visW/3.2);
+  targetSize=ease(targetSize,heart?Math.min(1.3,maxS):Math.max(.5,Math.min(maxS,.35+dist*2.4)),FEEL[feel].ema);
   if(prevDist!==null&&prevDist-dist>.12&&dist<.2&&!heart){burst(10);toast('👏 Бум!')}
   prevDist=dist;
   const fists=!heart&&ca===0&&cb===0;
@@ -311,7 +312,7 @@ function twoHands(a,b){
   else if(fistOn){fistOn=false;spreadTarget=1;burst(9)}
   let want=-1;
   if(heart)want=0;else if(ca===cb&&ca>=1&&ca<=3)want=ca+4;else if(Math.min(ca,cb)===0&&Math.max(ca,cb)===4)want=8;
-  if(want>=0){if(twoHold!==want){twoHold=want;twoSince=now}else if(now-twoSince>450&&kind!==want){setShape(want);twoSince=now+99999}}else twoHold=-1;
+  if(want>=0){if(twoHold!==want){twoHold=want;twoSince=now}else if(now-twoSince>FEEL[feel].hold&&kind!==want){setShape(want);twoSince=now+99999}}else twoHold=-1;
   status.textContent=heart?'🫶 Сердце из рук':fists?'✊✊ Сжимаю… разведи — взрыв!':want>=0?'🤲 '+SHAPE_NAME[want]:'🤲 Двигай руки: размер, поворот · хлопок — взрыв';
 }
 async function startCam(){
@@ -351,6 +352,7 @@ canvas.addEventListener('wheel',e=>{e.preventDefault();lastInput=performance.now
 /* ---------- UI ---------- */
 $('startbtn').onclick=startCam;$('nocam').onclick=noCam;
 document.querySelectorAll('#shapes button').forEach(b=>b.onclick=()=>{lastInput=performance.now();if(b.dataset.s==='more')setShape(kind>=5&&kind<8?kind+1:5,true);else setShape(+b.dataset.s,true)});
+$('feel').onclick=()=>{feel=(feel+1)%3;$('feel').textContent=['🐢','🚶','🐇'][feel];toast(['Плавно 🐢','Нормально 🚶','Быстро 🐇'][feel])};
 $('theme').onclick=()=>{setTheme((themeI+1)%THEMES.length);toast('Цвет сменён')};
 $('snd').onclick=()=>{soundOn=!soundOn;if(soundOn&&!ac){try{ac=new (window.AudioContext||window.webkitAudioContext)()}catch(e){soundOn=false}}
   if(ac&&ac.state==='suspended')ac.resume();$('snd').textContent=soundOn?'🔊':'🔇';toast(soundOn?'Звук сердцебиения включён':'Звук выключен')};
