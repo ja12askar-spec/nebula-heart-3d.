@@ -2,7 +2,9 @@
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#030207">
-<title>Nebula Heart 3D</title>
+<meta name="description" content="Nebula Heart PRO — интерактивная 3D-туманность с управлением жестами, частицами и рисованием.">
+<meta name="color-scheme" content="dark">
+<title>Nebula Heart PRO</title>
 <style>
 :root{--ac:#ff2d95}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -24,7 +26,13 @@ button:active{transform:scale(.92)}
 #shapes button{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:50px;padding:7px 3px;border-radius:18px;font-size:20px;line-height:1.1}
 #shapes button span{font-size:9.5px;opacity:.75;letter-spacing:.02em}
 #shapes button.on{background:color-mix(in srgb,var(--ac) 38%,transparent);box-shadow:0 0 16px -2px var(--ac),inset 0 0 0 1px var(--ac)}
-#tools button{width:40px;height:40px;border-radius:16px;font-size:19px}
+#tools button{width:40px;height:40px;border-radius:16px;font-size:19px;flex:0 0 auto}
+#shapes{max-width:100%;overflow-x:auto;scrollbar-width:none;justify-content:flex-start}
+#shapes::-webkit-scrollbar{display:none}
+#tools{max-width:100%;overflow-x:auto;scrollbar-width:none;justify-content:center}
+#tools::-webkit-scrollbar{display:none}
+button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+@media(max-width:380px){#shapes{gap:2px;padding:4px}#shapes button{min-width:44px;padding:7px 2px}#tools{gap:3px;padding:4px}#tools button{width:36px;height:38px;font-size:17px}}
 #tools button:hover,#shapes button:hover{background:rgba(255,255,255,.1)}
 #start{position:fixed;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;background:radial-gradient(ellipse at center,rgba(38,13,48,.55),rgba(3,2,7,.88) 75%);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px)}
 #startbox{max-width:360px}
@@ -72,7 +80,8 @@ button:active{transform:scale(.92)}
     <button id="snd" title="Звук">🔇</button>
     <button id="shot" title="Снимок">📸</button>
     <button id="reset" title="Сбросить">↺</button>
-    <button id="hidecam" title="Камера">📷</button>
+    <button id="hidecam" title="Показать или скрыть окно камеры" aria-label="Показать или скрыть окно камеры">📷</button>
+    <button id="fullscreen" title="Полный экран" aria-label="Полный экран">⛶</button>
   </div>
 </div>
 <div id="guide"><div class="gbox">
@@ -109,6 +118,7 @@ button:active{transform:scale(.92)}
 const $=id=>document.getElementById(id);
 const canvas=$('scene'),status=$('status'),video=$('cam'),ov=$('ov'),octx=ov.getContext('2d'),toastEl=$('toast');
 const small=Math.min(innerWidth,innerHeight)<700;
+// Чуть более щадящая плотность пикселей на телефонах снижает нагрев и рывки.
 const N=small?14000:26000;
 const rnd=Math.random,TAU=Math.PI*2;
 const THEMES=[['#ff2d95','#ff7ad9','#ffe0f4'],['#00b7ff','#7a5cff','#d4f6ff'],['#ffb300','#ff4d1f','#fff1bf'],['#2dffb0','#9a4dff','#dcfff0']];
@@ -117,6 +127,8 @@ let renderer,scene,camera,fadeScene,fadeCam,pts,stars,geo,A,B,R,mat;
 let rot=0,targetRot=0,tilt=.12,targetTilt=.12,size=1,targetSize=1,autoAngle=0;
 let sp=1,spv=0,spreadTarget=1,energy=0,time=0,last=performance.now();
 let handSeen=-1e9,handWas=false,lastInput=performance.now(),fistOn=false,prevC=null;
+// Сглаживаем landmarks отдельно для каждой руки, чтобы уменьшить дрожание жестов.
+const landmarkCache={};
 let kind=0,themeI=0,lastText='Я ❤ ТЕБЯ',holdCnt=-1,holdSince=0,tracker=null,camRunner=null;
 let ac=null,soundOn=false,lastP=0;
 let drawMode=false,penDown=false,penX=null,penY=null,lastX=null,lastY=null,dCount=0,onC=0,offC=0,downS=false,dGeo,dPts;
@@ -221,8 +233,8 @@ function fit(){
 }
 
 function init(){
-  renderer=new THREE.WebGLRenderer({canvas,antialias:false,preserveDrawingBuffer:true});
-  renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
+  renderer=new THREE.WebGLRenderer({canvas,antialias:false,preserveDrawingBuffer:true,powerPreference:'high-performance'});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,small?1.5:2));renderer.setSize(innerWidth,innerHeight);
   renderer.setClearColor(0x030207);renderer.autoClear=false;
   scene=new THREE.Scene();camera=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,.1,100);
   A=gen(0);B=A.slice();R=new Float32Array(N);for(let i=0;i<N;i++)R[i]=rnd();
@@ -310,8 +322,23 @@ function drawHand(l){
 }
 function onHand(r){
   octx.clearRect(0,0,ov.width,ov.height);
-  const hs=r.multiHandLandmarks||[];
-  if(!hs.length){status.textContent='Покажи ладонь камере';if(drawMode){penUp();$('cursor').style.display='none'}return}
+  const raw=r.multiHandLandmarks||[];
+  const labels=r.multiHandedness||[];
+  const alpha=Math.max(.16,Math.min(.72,FEEL[feel].ema));
+  const activeLabels=[];
+  const hs=raw.map((landmarks,hi)=>{
+    const label=(labels[hi]&&labels[hi].label)||('hand'+hi);
+    activeLabels.push(label);
+    const old=landmarkCache[label];
+    const smoothLandmarks=landmarks.map((pt,i)=>{
+      const prev=old&&old[i];
+      return prev?{x:prev.x+(pt.x-prev.x)*alpha,y:prev.y+(pt.y-prev.y)*alpha,z:(prev.z||0)+((pt.z||0)-(prev.z||0))*alpha}:{x:pt.x,y:pt.y,z:pt.z||0};
+    });
+    landmarkCache[label]=smoothLandmarks;
+    return smoothLandmarks;
+  });
+  Object.keys(landmarkCache).forEach(k=>{if(!activeLabels.includes(k)&&!k.startsWith('hand'))delete landmarkCache[k]});
+  if(!hs.length){status.textContent='Покажи ладонь камере';prevC=null;twoHold=-1;if(drawMode){penUp();$('cursor').style.display='none'}return}
   hs.forEach(l=>drawHand(l));
   if(drawMode){drawStep(hs[0]);return}
   if(hs.length>1)twoHands(hs[0],hs[1]);else oneHand(hs[0]);
@@ -433,11 +460,13 @@ $('snd').onclick=()=>{soundOn=!soundOn;if(soundOn&&!ac){try{ac=new (window.Audio
   if(ac&&ac.state==='suspended')ac.resume();$('snd').textContent=soundOn?'🔊':'🔇';toast(soundOn?'Звук сердцебиения включён':'Звук выключен')};
 $('reset').onclick=()=>{rollT=0;tpTx=0;tpTy=0;targetRot=0;targetTilt=.12;targetSize=1;autoAngle=0;spreadTarget=1;lastInput=performance.now()};
 $('hidecam').onclick=()=>{const e=$('camwrap');if(!tracker){toast('Камера не включена');return}e.style.display=e.style.display==='none'?'block':'none'};
+  $('fullscreen').onclick=async()=>{try{if(!document.fullscreenElement){await document.documentElement.requestFullscreen();$('fullscreen').textContent='⤢';toast('Полный экран включён')}else{await document.exitFullscreen();$('fullscreen').textContent='⛶';toast('Полный экран выключен')}}catch(e){toast('Полный экран недоступен в этом браузере')}};
+  document.addEventListener('fullscreenchange',()=>{$('fullscreen').textContent=document.fullscreenElement?'⤢':'⛶'});
 $('shot').onclick=()=>{renderer.render(scene,camera);canvas.toBlob(async bl=>{if(!bl)return;
   const f=new File([bl],'nebula-heart.png',{type:'image/png'});
   try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:'Nebula Heart'});return}}catch(e){if(e&&e.name==='AbortError')return}
   const a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download='nebula-heart.png';a.click();toast('Снимок сохранён 📸')},'image/png')};
-addEventListener('resize',()=>{if(!renderer)return;renderer.setSize(innerWidth,innerHeight);fit();renderer.clear()});
+addEventListener('resize',()=>{if(!renderer)return;renderer.setPixelRatio(Math.min(devicePixelRatio,small?1.5:2));renderer.setSize(innerWidth,innerHeight);fit();renderer.clear()});
 
 init();
 })();
