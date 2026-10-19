@@ -2,13 +2,14 @@
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#030207">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="description" content="Nebula Heart PRO — интерактивная 3D-туманность с управлением жестами, частицами и рисованием.">
 <meta name="color-scheme" content="dark">
 <title>Nebula Heart PRO</title>
 <style>
 :root{--ac:#ff2d95}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#030207;color:#fff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+html,body{overscroll-behavior:none;margin:0;width:100%;height:100%;overflow:hidden;background:#030207;color:#fff;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
 #scene{position:fixed;inset:0;width:100%;height:100%;display:block}
 #hud{position:fixed;top:calc(10px + env(safe-area-inset-top));left:0;right:0;text-align:center;pointer-events:none}
 h1{margin:6px 0 4px;font-size:clamp(20px,5.2vw,30px);letter-spacing:.2em;font-weight:800;background:linear-gradient(90deg,#fff,var(--ac),#fff);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 5s linear infinite;filter:drop-shadow(0 0 12px var(--ac))}
@@ -92,7 +93,7 @@ button:focus-visible{outline:2px solid #fff;outline-offset:2px}
   <p>🫶 Сердце из рук — большое сердце</p>
   <p>☝☝ тор · ✌✌ куб · 🤟🤟 звезда</p>
   <p>✊ + 🖐 (кулак и ладонь) — вихрь</p>
-  <p>↔ Расставь или своди руки — размер</p>
+  <p>✊ одной рукой — сердце сжимается, раскрой — удар</p>
   <p style="opacity:.8">Держи жест около секунды. Без камеры те же фигуры — в кнопке 🔮 «Ещё».</p>
   <button id="gcam" class="big">📷 Включить камеру</button>
   <button id="gclose" class="big">Понятно</button>
@@ -128,7 +129,11 @@ let rot=0,targetRot=0,tilt=.12,targetTilt=.12,size=1,targetSize=1,autoAngle=0;
 let sp=1,spv=0,spreadTarget=1,energy=0,time=0,last=performance.now();
 let handSeen=-1e9,handWas=false,lastInput=performance.now(),fistOn=false,prevC=null;
 // Сглаживаем landmarks отдельно для каждой руки, чтобы уменьшить дрожание жестов.
-const landmarkCache={};
+let tracks=[],fpsN=0,fpsT=performance.now(),cplx=1,qual=1,qAcc=0,qN=0,wl=null;
+const prm=()=>Math.min(devicePixelRatio,small?1.5:2)*(.6+.4*qual);
+function buzz(n){try{navigator.vibrate&&navigator.vibrate(n)}catch(e){}}
+async function lockWake(){try{if("wakeLock" in navigator&&!wl){wl=await navigator.wakeLock.request("screen");wl.addEventListener("release",()=>{wl=null})}}catch(e){}}
+function applyQ(){geo.setDrawRange(0,Math.floor(N*qual));renderer.setPixelRatio(prm());renderer.setSize(innerWidth,innerHeight);fit();renderer.clear()}
 let kind=0,themeI=0,lastText='Я ❤ ТЕБЯ',holdCnt=-1,holdSince=0,tracker=null,camRunner=null;
 let ac=null,soundOn=false,lastP=0;
 let drawMode=false,penDown=false,penX=null,penY=null,lastX=null,lastY=null,dCount=0,onC=0,offC=0,downS=false,dGeo,dPts;
@@ -234,7 +239,7 @@ function fit(){
 
 function init(){
   renderer=new THREE.WebGLRenderer({canvas,antialias:false,preserveDrawingBuffer:true,powerPreference:'high-performance'});
-  renderer.setPixelRatio(Math.min(devicePixelRatio,small?1.5:2));renderer.setSize(innerWidth,innerHeight);
+  renderer.setPixelRatio(prm());renderer.setSize(innerWidth,innerHeight);
   renderer.setClearColor(0x030207);renderer.autoClear=false;
   scene=new THREE.Scene();camera=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,.1,100);
   A=gen(0);B=A.slice();R=new Float32Array(N);for(let i=0;i<N;i++)R[i]=rnd();
@@ -272,7 +277,7 @@ function morphTo(k){
 function setTheme(i){themeI=i;const t=THEMES[i];for(let c=0;c<3;c++)tC[c].set(t[c]);document.documentElement.style.setProperty('--ac',t[0])}
 function setShape(k,fromUI){
   if(k===4&&fromUI){const v=prompt('Что написать из частиц?',lastText);if(v===null)return;const s=v.trim().slice(0,18);if(!s)return;lastText=s}
-  kind=k;morphTo(k);if(k!==9)setTheme(SHAPE_THEME[k]);
+  kind=k;morphTo(k);buzz(20);if(k!==9)setTheme(SHAPE_THEME[k]);
   document.querySelectorAll('#shapes button').forEach(b=>b.classList.toggle('on',b.dataset.s==='more'?(k>=5&&k<9):+b.dataset.s===k));
   toast(SHAPE_NAME[k]);
 }
@@ -286,6 +291,7 @@ function thump(f,g){if(!ac)return;const t=ac.currentTime,o=ac.createOscillator()
 function animate(){
   requestAnimationFrame(animate);
   const now=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;time+=dt;
+  qAcc+=dt;qN++;if(qAcc>2){const av=qAcc/qN;qAcc=0;qN=0;if(av>.045&&qual>.45){qual=Math.max(.45,qual-.15);applyQ()}else if(av<.02&&qual<1){qual=Math.min(1,qual+.1);applyQ()}}
   const hand=now-handSeen<500,idle=!hand&&now-lastInput>2500;
   if(handWas&&!hand){fistOn=false;spreadTarget=1;prevC=null;octx.clearRect(0,0,ov.width,ov.height)}
   handWas=hand;
@@ -312,7 +318,9 @@ function animate(){
 
 /* ---------- hand tracking ---------- */
 function d2(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
-function fingers(l){let n=0;[[8,6],[12,10],[16,14],[20,18]].forEach(([t,p])=>{if(d2(l[t],l[0])>d2(l[p],l[0])*1.12)n++});return n}
+function ang(l,m,p,t){const ax=l[p].x-l[m].x,ay=l[p].y-l[m].y,bx=l[t].x-l[p].x,by=l[t].y-l[p].y;return(ax*bx+ay*by)/(Math.hypot(ax,ay)*Math.hypot(bx,by)+1e-6)}
+function ext(l,t,p,m){return d2(l[t],l[0])>d2(l[p],l[0])*1.08&&ang(l,m,p,t)>.35}
+function fingers(l){let n=0;[[8,6,5],[12,10,9],[16,14,13],[20,18,17]].forEach(([t,p,m])=>{if(ext(l,t,p,m))n++});return n}
 function drawHand(l){
   const W=ov.width,H=ov.height,vw=video.videoWidth||640,vh=video.videoHeight||480,s=Math.max(W/vw,H/vh),ox=(W-vw*s)/2,oy=(H-vh*s)/2;
   const X=p=>p.x*vw*s+ox,Y=p=>p.y*vh*s+oy;
@@ -324,21 +332,21 @@ function onHand(r){
   octx.clearRect(0,0,ov.width,ov.height);
   const raw=r.multiHandLandmarks||[];
   const labels=r.multiHandedness||[];
-  const alpha=Math.max(.16,Math.min(.72,FEEL[feel].ema));
-  const activeLabels=[];
-  const hs=raw.map((landmarks,hi)=>{
-    const label=(labels[hi]&&labels[hi].label)||('hand'+hi);
-    activeLabels.push(label);
-    const old=landmarkCache[label];
-    const smoothLandmarks=landmarks.map((pt,i)=>{
-      const prev=old&&old[i];
-      return prev?{x:prev.x+(pt.x-prev.x)*alpha,y:prev.y+(pt.y-prev.y)*alpha,z:(prev.z||0)+((pt.z||0)-(prev.z||0))*alpha}:{x:pt.x,y:pt.y,z:pt.z||0};
-    });
-    landmarkCache[label]=smoothLandmarks;
-    return smoothLandmarks;
-  });
-  Object.keys(landmarkCache).forEach(k=>{if(!activeLabels.includes(k)&&!k.startsWith('hand'))delete landmarkCache[k]});
-  if(!hs.length){status.textContent='Покажи ладонь камере';prevC=null;twoHold=-1;if(drawMode){penUp();$('cursor').style.display='none'}return}
+  const t0=performance.now(),base=Math.max(.16,Math.min(.72,FEEL[feel].ema)),used=new Set();
+  fpsN++;if(t0-fpsT>3000){const f=fpsN/((t0-fpsT)/1000);if(fpsN>8&&f<14&&cplx>0&&tracker){cplx=0;tracker.setOptions({modelComplexity:0});toast('⚡ Облегчённый режим камеры')}fpsN=0;fpsT=t0}
+  // Адаптивное сглаживание: медленно — гладко, быстрое движение — без отставания. Руки отслеживаются по положению запястья, а не по метке Left/Right.
+  const hs=raw.map(lm=>{
+    const w=lm[0];let best=null,bd=.3;
+    tracks.forEach(t=>{if(used.has(t))return;const d=Math.hypot(t.lm[0].x-w.x,t.lm[0].y-w.y);if(d<bd){bd=d;best=t}});
+    if(!best){best={lm:null,seen:0};tracks.push(best)}
+    used.add(best);best.seen=t0;const old=best.lm,sz=Math.max(.05,Math.hypot(lm[0].x-lm[9].x,lm[0].y-lm[9].y));
+    best.lm=lm.map((pt,i)=>{const p=old&&old[i];if(!p)return{x:pt.x,y:pt.y,z:pt.z||0};
+      const v=Math.hypot(pt.x-p.x,pt.y-p.y)/sz,a=Math.min(.9,base+v*1.2);
+      return{x:p.x+(pt.x-p.x)*a,y:p.y+(pt.y-p.y)*a,z:p.z+((pt.z||0)-p.z)*a}});
+    return best.lm});
+  tracks=tracks.filter(t=>t0-t.seen<400);
+  const q=(labels[0]&&labels[0].score)||0;$('camwrap').style.borderColor=!hs.length?'':q>.85?'#2dffb0':q>.7?'#ffb300':'#ff4d4d';
+  if(!hs.length){status.textContent='Покажи ладонь камере';tracks=[];prevC=null;twoHold=-1;if(drawMode){penUp();$('cursor').style.display='none'}return}
   hs.forEach(l=>drawHand(l));
   if(drawMode){drawStep(hs[0]);return}
   if(hs.length>1)twoHands(hs[0],hs[1]);else oneHand(hs[0]);
@@ -349,12 +357,14 @@ function oneHand(l){
   if(prevC)energy=Math.min(1,Math.max(energy,Math.hypot(cx-prevC[0],cy-prevC[1])*9));
   prevC=[cx,cy];
   targetRot=ease(targetRot,(.5-cx)*2.6,FEEL[feel].ema);targetTilt=ease(targetTilt,(cy-.5)*1.0,FEEL[feel].ema);
-  const ratio=d2(l[4],l[8])/Math.max(.01,d2(l[0],l[9]));
-  targetSize=ease(targetSize,Math.max(.5,Math.min(1.9,.5+(ratio-.15)/1.05*1.4)),Math.max(.25,FEEL[feel].ema));
-  status.textContent='🤏 Сводишь пальцы — меньше, разводишь — больше'
+  const fist=stab('one',fingers(l))===0;
+  if(fist!==fistOn){fistOn=fist;spreadTarget=fist?.6:1;if(!fist){burst(9);buzz(15)}}
+  if(!fist){const ratio=d2(l[4],l[8])/Math.max(.01,d2(l[0],l[9]));
+    targetSize=ease(targetSize,Math.max(.5,Math.min(1.9,.5+(ratio-.15)/1.05*1.4)),Math.max(.25,FEEL[feel].ema))}
+  status.textContent=fist?'✊ Сжал — раскрой ладонь для удара':'🤏 Сводишь пальцы — меньше, разводишь — больше'
 }
 function mid(l){return{x:(l[0].x+l[5].x+l[17].x)/3,y:(l[0].y+l[5].y+l[17].y)/3}}
-function extMid(l){let n=0;[[12,10],[16,14],[20,18]].forEach(([t,p])=>{if(d2(l[t],l[0])>d2(l[p],l[0])*1.12)n++});return n}
+function extMid(l){let n=0;[[12,10,9],[16,14,13],[20,18,17]].forEach(([t,p,m])=>{if(ext(l,t,p,m))n++});return n}
 function twoHands(a,b){
   const now=performance.now();handSeen=now;twoSeen=now;lastInput=now;
   let ma=mid(a),mb=mid(b);
@@ -391,7 +401,7 @@ function drawStep(l){
   const wx=Math.max(-v[0]/2,Math.min(v[0]/2,(.5-t.x)*v[0]*1.25)),wy=Math.max(-v[1]/2,Math.min(v[1]/2,(.5-t.y)*v[1]*1.25));
   const a=Math.max(.3,FEEL[feel].ema);
   if(penX===null){penX=wx;penY=wy}else{penX=ease(penX,wx,a);penY=ease(penY,wy,a)}
-  const pointing=extMid(l)===0&&d2(l[8],l[0])>d2(l[6],l[0])*1.12;
+  const pointing=extMid(l)===0&&ext(l,8,6,5);
   if(pointing){onC++;offC=0}else{offC++;onC=0}
   if(onC>=2)downS=true;if(offC>=3)downS=false;
   moveCursor(penX,penY,downS);
@@ -415,21 +425,21 @@ async function startCam(){
   const b=$('startbtn');b.disabled=true;b.textContent='Подключаем камеру…';
   try{
     if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw Error('Камера доступна только на защищённой HTTPS-странице. Открой HTML через онлайн-редактор, например CodePen.');
-    video.srcObject=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});
+    video.srcObject=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480},frameRate:{ideal:30,max:30}},audio:false});
     await video.play();
     if(!window.Hands)throw Error('Не загрузилась библиотека распознавания. Проверь интернет.');
     tracker=new Hands({locateFile:f=>'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/'+f});
-    tracker.setOptions({maxNumHands:2,modelComplexity:small?0:1,minDetectionConfidence:.55,minTrackingConfidence:.55});
+    tracker.setOptions({maxNumHands:2,modelComplexity:cplx,minDetectionConfidence:.6,minTrackingConfidence:.5});
     tracker.onResults(onHand);
     camRunner=new Camera(video,{onFrame:async()=>{if(tracker)await tracker.send({image:video})},width:640,height:480});
     await camRunner.start();
-    $('camwrap').style.display='block';$('start').style.display='none';status.textContent='Покажи ладонь камере';fadeHint();
+    $('camwrap').style.display='block';$('start').style.display='none';status.textContent='Покажи ладонь камере';fadeHint();lockWake();
   }catch(e){
     alert('Не удалось запустить камеру: '+e.message+'\n\nМожно играть и без неё: тяни пальцем по экрану.');
     b.disabled=false;b.textContent='Попробовать снова';status.textContent='Режим без камеры: тяни пальцем';
   }
 }
-function noCam(){$('start').style.display='none';status.textContent='Тяни пальцем · два пальца — размер и поворот';fadeHint()}
+function noCam(){lockWake();$('start').style.display='none';status.textContent='Тяни пальцем · два пальца — размер и поворот';fadeHint()}
 function fadeHint(){setTimeout(()=>{$('hint').style.opacity=0},9000)}
 
 /* ---------- touch / mouse ---------- */
@@ -466,8 +476,10 @@ $('shot').onclick=()=>{renderer.render(scene,camera);canvas.toBlob(async bl=>{if
   const f=new File([bl],'nebula-heart.png',{type:'image/png'});
   try{if(navigator.canShare&&navigator.canShare({files:[f]})){await navigator.share({files:[f],title:'Nebula Heart'});return}}catch(e){if(e&&e.name==='AbortError')return}
   const a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download='nebula-heart.png';a.click();toast('Снимок сохранён 📸')},'image/png')};
-addEventListener('resize',()=>{if(!renderer)return;renderer.setPixelRatio(Math.min(devicePixelRatio,small?1.5:2));renderer.setSize(innerWidth,innerHeight);fit();renderer.clear()});
+addEventListener('resize',()=>{if(!renderer)return;renderer.setPixelRatio(prm());renderer.setSize(innerWidth,innerHeight);fit();renderer.clear()});
 
+document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(video.srcObject&&video.paused)video.play().catch(()=>{});lockWake()}});
+addEventListener('orientationchange',()=>setTimeout(()=>{if(renderer){renderer.setSize(innerWidth,innerHeight);fit();renderer.clear()}},300));
 init();
 })();
 </script></body></html>
